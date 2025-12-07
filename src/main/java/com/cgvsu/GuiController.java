@@ -1,6 +1,10 @@
 package com.cgvsu;
 
+import com.cgvsu.io.*;
 import com.cgvsu.render_engine.RenderEngine;
+import com.cgvsu.scene.Scene;
+import com.cgvsu.scene.SceneModel;
+import com.cgvsu.ui.ErrorDialogs;
 import javafx.fxml.FXML;
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
@@ -18,7 +22,6 @@ import java.io.File;
 import javax.vecmath.Vector3f;
 
 import com.cgvsu.model.Model;
-import com.cgvsu.objreader.ObjReader;
 import com.cgvsu.render_engine.Camera;
 
 public class GuiController {
@@ -31,7 +34,7 @@ public class GuiController {
     @FXML
     private Canvas canvas;
 
-    private Model mesh = null;
+    private Scene scene;
 
     private Camera camera = new Camera(
             new Vector3f(0, 00, 100),
@@ -42,6 +45,9 @@ public class GuiController {
 
     @FXML
     private void initialize() {
+        scene = new Scene("Main Scene");
+        scene.addCamera(camera);
+
         anchorPane.prefWidthProperty().addListener((ov, oldValue, newValue) -> canvas.setWidth(newValue.doubleValue()));
         anchorPane.prefHeightProperty().addListener((ov, oldValue, newValue) -> canvas.setHeight(newValue.doubleValue()));
 
@@ -55,8 +61,11 @@ public class GuiController {
             canvas.getGraphicsContext2D().clearRect(0, 0, width, height);
             camera.setAspectRatio((float) (width / height));
 
-            if (mesh != null) {
-                RenderEngine.render(canvas.getGraphicsContext2D(), camera, mesh, (int) width, (int) height);
+            for (var sceneModel : scene.getElementsOfType(SceneModel.class)) {
+                if (sceneModel.isVisible() && sceneModel.isValid()) {
+                    RenderEngine.render(canvas.getGraphicsContext2D(), camera,
+                                      sceneModel.getModel(), (int) width, (int) height);
+                }
             }
         });
 
@@ -75,14 +84,88 @@ public class GuiController {
             return;
         }
 
-        Path fileName = Path.of(file.getAbsolutePath());
+        Path filePath = Path.of(file.getAbsolutePath());
 
         try {
-            String fileContent = Files.readString(fileName);
-            mesh = ObjReader.read(fileContent);
-            // todo: обработка ошибок
-        } catch (IOException exception) {
+            ModelLoader loader = ModelIOFactory.createLoader(filePath);
+            Model model = loader.load(filePath);
 
+            String modelId = "model_" + System.currentTimeMillis();
+            String modelName = file.getName();
+
+            SceneModel sceneModel = new SceneModel(modelId, modelName, model);
+            scene.addElement(sceneModel);
+
+            scene.selectElement(sceneModel);
+
+            ErrorDialogs.showInformation("Модель загружена",
+                "Модель успешно загружена",
+                String.format("Загружено: %s\nВершин: %d, Полигонов: %d",
+                    modelName, model.vertices.size(), model.polygons.size()),
+                (Stage) canvas.getScene().getWindow());
+
+        } catch (ModelIOFactoryException e) {
+            ErrorDialogs.showIOFactoryError(e, (Stage) canvas.getScene().getWindow());
+        } catch (ModelLoadingException e) {
+            ErrorDialogs.showModelLoadingError(e, (Stage) canvas.getScene().getWindow());
+        } catch (Exception e) {
+            ErrorDialogs.showGeneralError("Неожиданная ошибка",
+                "Произошла непредвиденная ошибка при загрузке модели",
+                e.getMessage(), e, (Stage) canvas.getScene().getWindow());
+        }
+    }
+
+    @FXML
+    private void onSaveModelMenuItemClick() {
+        var selectedElements = scene.getSelectedElements();
+        if (selectedElements.isEmpty()) {
+            ErrorDialogs.showGeneralError("Нет выбранной модели",
+                "Выберите модель для сохранения",
+                "Сначала загрузите и выберите модель в сцене.",
+                null, (Stage) canvas.getScene().getWindow());
+            return;
+        }
+
+        var selectedElement = selectedElements.get(0);
+        if (!(selectedElement instanceof SceneModel)) {
+            ErrorDialogs.showGeneralError("Неверный тип элемента",
+                "Выбран неподдерживаемый тип элемента",
+                "Можно сохранять только модели.",
+                null, (Stage) canvas.getScene().getWindow());
+            return;
+        }
+
+        SceneModel sceneModel = (SceneModel) selectedElement;
+
+        FileChooser fileChooser = new FileChooser();
+        fileChooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("OBJ Model (*.obj)", "*.obj"));
+        fileChooser.setTitle("Save Model");
+        fileChooser.setInitialFileName(sceneModel.getName() + ".obj");
+
+        File file = fileChooser.showSaveDialog((Stage) canvas.getScene().getWindow());
+        if (file == null) {
+            return;
+        }
+
+        Path filePath = Path.of(file.getAbsolutePath());
+
+        try {
+            ModelSaver saver = ModelIOFactory.createSaver(filePath);
+            saver.save(sceneModel.getModel(), filePath);
+
+            ErrorDialogs.showInformation("Модель сохранена",
+                "Модель успешно сохранена",
+                String.format("Сохранено: %s", file.getName()),
+                (Stage) canvas.getScene().getWindow());
+
+        } catch (ModelIOFactoryException e) {
+            ErrorDialogs.showIOFactoryError(e, (Stage) canvas.getScene().getWindow());
+        } catch (ModelSavingException e) {
+            ErrorDialogs.showModelSavingError(e, (Stage) canvas.getScene().getWindow());
+        } catch (Exception e) {
+            ErrorDialogs.showGeneralError("Неожиданная ошибка",
+                "Произошла непредвиденная ошибка при сохранении модели",
+                e.getMessage(), e, (Stage) canvas.getScene().getWindow());
         }
     }
 
